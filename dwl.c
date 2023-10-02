@@ -33,6 +33,7 @@
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_touch.h>
 #include <wlr/types/wlr_presentation_time.h>
 #include <wlr/types/wlr_primary_selection.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
@@ -245,6 +246,7 @@ static void createlocksurface(struct wl_listener *listener, void *data);
 static void createmon(struct wl_listener *listener, void *data);
 static void createnotify(struct wl_listener *listener, void *data);
 static void createpointer(struct wlr_pointer *pointer);
+static void createtouch(struct wlr_touch *touch);
 static void cursorframe(struct wl_listener *listener, void *data);
 static void destroydragicon(struct wl_listener *listener, void *data);
 static void destroyidleinhibitor(struct wl_listener *listener, void *data);
@@ -277,6 +279,11 @@ static void motionabsolute(struct wl_listener *listener, void *data);
 static void motionnotify(uint32_t time);
 static void motionrelative(struct wl_listener *listener, void *data);
 static void moveresize(const Arg *arg);
+static void touchup(struct wl_listener *listener, void *data);
+static void touchdown(struct wl_listener *listener, void *data);
+static void touchmotion(struct wl_listener *listener, void *data);
+static void touchcancel(struct wl_listener *listener, void *data);
+static void touchframe(struct wl_listener *listener, void *data);
 static void outputmgrapply(struct wl_listener *listener, void *data);
 static void outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test);
 static void outputmgrtest(struct wl_listener *listener, void *data);
@@ -373,6 +380,11 @@ static struct wl_listener cursor_button = {.notify = buttonpress};
 static struct wl_listener cursor_frame = {.notify = cursorframe};
 static struct wl_listener cursor_motion = {.notify = motionrelative};
 static struct wl_listener cursor_motion_absolute = {.notify = motionabsolute};
+static struct wl_listener cursor_touch_up = {.notify = touchup};
+static struct wl_listener cursor_touch_down = {.notify = touchdown};
+static struct wl_listener cursor_touch_motion = {.notify = touchmotion};
+static struct wl_listener cursor_touch_cancel = {.notify = touchcancel};
+static struct wl_listener cursor_touch_frame = {.notify = touchframe};
 static struct wl_listener drag_icon_destroy = {.notify = destroydragicon};
 static struct wl_listener idle_inhibitor_create = {.notify = createidleinhibitor};
 static struct wl_listener idle_inhibitor_destroy = {.notify = destroyidleinhibitor};
@@ -1059,6 +1071,12 @@ createpointer(struct wlr_pointer *pointer)
 }
 
 void
+createtouch(struct wlr_touch *touch){
+
+	wlr_cursor_attach_input_device(cursor, &touch->base);
+}
+
+void
 cursorframe(struct wl_listener *listener, void *data)
 {
 	/* This event is forwarded by the cursor when a pointer emits an frame
@@ -1369,13 +1387,29 @@ inputdevice(struct wl_listener *listener, void *data)
 
 	switch (device->type) {
 	case WLR_INPUT_DEVICE_KEYBOARD:
+		fprintf(stderr, "\nCREATING KEYBOARD DEVICE\n");
 		createkeyboard(wlr_keyboard_from_input_device(device));
 		break;
 	case WLR_INPUT_DEVICE_POINTER:
+		fprintf(stderr, "\nCREATING MOUSE DEVICE\n");
 		createpointer(wlr_pointer_from_input_device(device));
+		break;
+	case WLR_INPUT_DEVICE_TOUCH:
+		fprintf(stderr, "\nCREATING TOUCH DEVICE\n");
+		createtouch(wlr_touch_from_input_device(device));
+		break;
+	case WLR_INPUT_DEVICE_TABLET_TOOL:
+		fprintf(stderr, "\nCREATING TABLET TOOL DEVICE\n");
+		break;
+	case WLR_INPUT_DEVICE_TABLET_PAD:
+		fprintf(stderr, "\nCREATING TABLET PAD DEVICE\n");
+		break;
+	case WLR_INPUT_DEVICE_SWITCH:
+		fprintf(stderr, "\nCREATING SWITCH DEVICE\n");
 		break;
 	default:
 		/* TODO handle other input device types */
+		fprintf(stderr, "\nUNRECOGNISED INPUT DEVICE\n");
 		break;
 	}
 
@@ -1383,7 +1417,7 @@ inputdevice(struct wl_listener *listener, void *data)
 	 * communiciated to the client. In dwl we always have a cursor, even if
 	 * there are no pointer devices, so we always include that capability. */
 	/* TODO do we actually require a cursor? */
-	caps = WL_SEAT_CAPABILITY_POINTER;
+	caps = WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_TOUCH;
 	if (!wl_list_empty(&keyboards))
 		caps |= WL_SEAT_CAPABILITY_KEYBOARD;
 	wlr_seat_set_capabilities(seat, caps);
@@ -1718,6 +1752,65 @@ motionrelative(struct wl_listener *listener, void *data)
 }
 
 void
+touchup(struct wl_listener *listener, void *data) {
+	struct wlr_touch_up_event *event = data;
+	fprintf(stderr, "\nTOUCHUP\n");
+
+	IDLE_NOTIFY_ACTIVITY;
+
+	wlr_seat_touch_notify_up(seat, event->time_msec, event->touch_id);
+}
+
+
+void
+touchdown(struct wl_listener *listener, void *data) {
+	Client *client = NULL;
+	double sx = 0, sy = 0;
+	struct wlr_surface *surface = NULL;
+	struct wlr_touch_down_event *event = data;
+
+	fprintf(stderr, "\nTOUCHDOWN\n");
+
+	//tell cursor what is happening:
+	wlr_cursor_warp_absolute(cursor, &event->touch->base, event->x, event->y);
+
+	IDLE_NOTIFY_ACTIVITY;
+
+	xytonode(cursor->x, cursor->y, &surface, &client, NULL, &sx, &sy);
+	
+	if(client)
+		wlr_seat_touch_notify_down(seat, surface, event->time_msec, event->touch_id, sx, sy);
+}
+
+void
+touchmotion(struct wl_listener *listener, void *data) {
+	//TODO
+	Client *client = NULL;
+	double sx = 0, sy = 0;
+	struct wlr_surface *surface = NULL;
+	struct wlr_touch_motion_event *event = data;
+	fprintf(stderr, "\nTOUCHMOTION\n");
+
+	wlr_cursor_warp_absolute(cursor, &event->touch->base, event->x, event->y);
+	IDLE_NOTIFY_ACTIVITY;
+
+	xytonode(cursor->x, cursor->y, &surface, &client, NULL, &sx, &sy);
+
+	wlr_seat_touch_notify_motion(seat, event->time_msec, event->touch_id, sx, sy);
+}
+
+void
+touchcancel(struct wl_listener *listener, void *data) {
+	//TODO
+}
+
+void touchframe(struct wl_listener *listener, void *data) {
+	//TODO
+}
+
+
+
+void
 moveresize(const Arg *arg)
 {
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
@@ -1843,6 +1936,7 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 	wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
 	wlr_seat_pointer_notify_motion(seat, time, sx, sy);
 }
+
 
 void
 printstatus(void)
@@ -2271,6 +2365,15 @@ setup(void)
 	wl_signal_add(&cursor->events.button, &cursor_button);
 	wl_signal_add(&cursor->events.axis, &cursor_axis);
 	wl_signal_add(&cursor->events.frame, &cursor_frame);
+
+	/*
+	 * Touch Events
+	 */
+	wl_signal_add(&cursor->events.touch_up, &cursor_touch_up);
+	wl_signal_add(&cursor->events.touch_down, &cursor_touch_down);
+	wl_signal_add(&cursor->events.touch_motion, &cursor_touch_motion);
+	wl_signal_add(&cursor->events.touch_cancel, &cursor_touch_cancel);
+	wl_signal_add(&cursor->events.touch_frame, &cursor_touch_frame);
 
 	/*
 	 * Configures a seat, which is a single "seat" at which a user sits and
